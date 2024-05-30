@@ -243,7 +243,7 @@ if __name__ == '__main__':
     model_decriptipn = 'CGAN + Merton Jump '
 
     config = Config(
-        epochs=10000,
+        epochs=10,
         pred_len=1,
         seq_len=10,
         epoch=100,
@@ -260,7 +260,7 @@ if __name__ == '__main__':
     )
 
     # create a new job
-    jobID, ex_results_path = create_exp(result_path, config.model_name)
+    jobID, ex_results_path = create_exp(result_path , 'exp.xlsx', config.model_name)
 
     dim = 128
 
@@ -351,7 +351,7 @@ if __name__ == '__main__':
     preds = predictions.flatten()
 
     #################################################
-    # Ploting 
+    # Ploting
     #################################################
 
     plot_distibuation(trues, preds)
@@ -376,5 +376,3 @@ if __name__ == '__main__':
     plt.title(' Jump Diffusion Process')
     plt.show()
     plt.savefig(saved_model_path + "merton:jump.jpg")
-
-
