@@ -1,16 +1,43 @@
+import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
-
+from arch import arch_model
 mm = MinMaxScaler()
 ss = StandardScaler()
 
 
-def create_dataset(df, train_size, valid_size, test_size, seq_len, pred_len):
 
-    data = data_prep(df, seq_len, pred_len, train_size, valid_size, test_size)
+
+
+def create_dataset(df, target, train_size, valid_size, test_size, seq_len, pred_len):
+
+    data = data_prep(df, target, seq_len, pred_len, train_size, valid_size, test_size)
     return data
+
+def grach_model(ts, horizon = 30):
+
+    #normlise
+    ts = ss.fit_transform(ts)
+    ts = pd.DataFrame(ts)
+
+    # Calculate log returns
+    returns = np.log(ts).diff().dropna()
+    # Fit the GARCH(1, 1) model
+    model = arch_model(returns, vol="Garch", p=1, q=1)
+    results  = model.fit()
+    # Estimate the volatility
+    estimated_volatility = results.conditional_volatility
+
+    #print("grach", len(estimated_volatility))
+
+    # Forecast the volatility
+    forecast = results.forecast(start=0, horizon=horizon)
+    forecast_volatility = forecast.variance.dropna().values.flatten()
+
+    return returns, estimated_volatility, forecast_volatility
+
 def split_sequences(input_sequences, output_sequence, n_steps_in, n_steps_out):
     X, y = list(), list() # instantiate X and y
     for i in range(len(input_sequences)):
@@ -67,8 +94,8 @@ def pytorch_data_input(data, batch_size):
     test_loader_one = DataLoader(test, batch_size=1, shuffle=False, drop_last=True)
     return train_loader, val_loader, test_loader , test_loader_one
 
-def data_prep(df, seq_len, pred_len, train_size, valid_size, test_size):
-    X, y = df, df.Price.values
+def data_prep(df, target,  seq_len, pred_len, train_size, valid_size, test_size):
+    X, y = df, df[target].values
     # 5- Normalize
     X_trans, y_trans = normalize__my_data_(X, y)
 
@@ -85,5 +112,9 @@ def data_prep(df, seq_len, pred_len, train_size, valid_size, test_size):
     return data
 
 
-
-
+def data_to_tensor(data, device):
+    x_train = torch.tensor(data['X_train'], device=device, dtype=torch.float32)
+    y_train = torch.tensor(data['y_train'], device=device, dtype=torch.float32)
+    x_val = torch.tensor(data['X_valid'], device=device, dtype=torch.float32)
+    y_val = data['y_valid']
+    return x_train, y_train, x_val, y_val

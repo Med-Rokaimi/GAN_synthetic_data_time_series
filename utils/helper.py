@@ -15,13 +15,13 @@ def save(model, path , score, save_model):
     score = str(score)
 
     if save_model:
-        torch_model = path + score + "_" + create_time_stamp() + ".torch"
+        stamped_name__ = score + "_" + create_time_stamp() + ".torch"
+        torch_model = os.path.join(path,stamped_name__)
         torch.save({'g_state_dict': model.state_dict()}, torch_model)
     else:
         torch_model = path
 
     return torch_model
-
 
 
 
@@ -83,11 +83,14 @@ class EarlyStopping:
 
 
 
-def create_exp(result_path, model_name):
+def create_exp(result_path, file_name , model_name):
 
         # Read the Excel file
         new_job_id = 0
-        df = pd.read_excel(result_path)
+
+        full_path = os.path.join(result_path, file_name)
+        print(full_path)
+        df = pd.read_csv(full_path)
 
         # Check if the jobID column exists and has values
         if 'jobID' in df.columns:
@@ -101,9 +104,13 @@ def create_exp(result_path, model_name):
             print('Eerror: JobID column is not exist')
             exit()
 
-        timestr= create_time_stamp()
-        exp_result_path = result_path + '/' + str(new_job_id) +model_name + timestr
 
+
+        model_folder = os.path.join(result_path, model_name)
+        if not os.path.exists(model_folder):
+            os.makedirs(model_folder)
+        timestr= create_time_stamp()
+        exp_result_path = os.path.join(model_folder, str(new_job_id) + model_name + timestr)
         if not os.path.exists(exp_result_path):
             os.makedirs(exp_result_path)
 
@@ -114,35 +121,76 @@ import pandas as pd
 from openpyxl import load_workbook
 
 
+
 def append_to_excel(file_path, new_data):
+
+    print(file_path)
+    import csv
+
     """
-    Appends a new results to the exp.xlsx.
+    Appends a new results to the exp.csv.
 
     Parameters:
     file_path (str): The path to the Excel file.
     new_data (dict): A dictionary containing the new data to append. The keys should match the column names in the Excel file.
     """
-    # Define the column order in the Excel file
-    columns = ['jobID', 'timestamp', 'epoch', 'Model', 'Dataset', 'crps', 'mse', 'hidden_unites1',
-               'hidden_unites2', 'lr', 'droupout', 'pred_len', 'seq_len', 'runtime', 'config',
-               'sde_params', 'seeds']
-
-    # Load the existing Excel file
-    book = load_workbook(file_path)
+    # get the excel file column names
+    df = pd.read_csv(file_path)
+    columns = df.columns
 
     # Convert the new data to a DataFrame with the correct column order
     new_df = pd.DataFrame([new_data], columns=columns)
 
-    # Load the sheet you want to append data to
-    writer = pd.ExcelWriter(file_path, engine='openpyxl')
-    writer.book = book
+    # Open the CSV file in append mode
+    with open(file_path, 'a', newline='') as csvfile:
+        # Create a DictWriter object
+        csvwriter = csv.DictWriter(csvfile, fieldnames=new_df.keys())
+        # Check if the file is empty to write the header
+        file_is_empty = csvfile.tell() == 0
+        if file_is_empty:
+            csvwriter.writeheader()
 
-    # Get the last row in the existing Excel file
-    sheet_name = 'Sheet1'  # Replace with your sheet name
-    startrow = book[sheet_name].max_row
+        # Append the new row
+        csvwriter.writerow(new_data)
+    print(f"New row appended to {file_path} ")
 
-    # Append the new data to the existing data in the sheet
-    with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-        new_df.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=startrow)
 
-    print(f"New row appended to {file_path} in sheet {sheet_name}")
+def save_config_to_excel(jobID, exp_path, results_folder, config, model_decriptipn, generator, metrics, dataset, runtime):
+    data =  { 'jobID':jobID, 'timestamp': create_time_stamp() , 'path':exp_path,
+              'Model': config.model_name,
+              'epoch':config.epochs,
+               'Dataset': config.dataset,
+              'noise':config.noise_type, 'loss':config.loss,'sde':config.sde,
+              'crps':metrics['crps'], 'mse':metrics['mse'],
+              'hidden_unites1': config.hidden_units1,
+              'hidden_unites2': config.hidden_units2,
+              'lr':config.lr, 'droupout': config.dropout,
+              'pred_len': config.pred_len, 'seq_len':config.seq_len,
+              'runtime':runtime, 'config':config,
+              'sde_params': [generator.lam, generator.sigma],
+              'seeds':'', 'model_decription':model_decriptipn,
+              'dataset_shape':dataset}
+
+    append_to_excel(results_folder,data)
+    print(results_folder)
+    print("append to excel")
+
+
+def eda(ts, target):
+    import  matplotlib.pyplot as plt
+    # Calculate the rolling mean and standard deviation
+    print(ts.columns)
+    rolling_mean = ts[target].rolling(window=30).mean()
+    rolling_std = ts[target].rolling(window=30).std()
+
+    # Plot the rolling mean and standard deviation
+    plt.figure(figsize=(10, 6))
+    plt.plot(ts.index, ts[target], label="Volatility")
+    plt.plot(rolling_mean.index, rolling_mean, label="Rolling Mean")
+    plt.plot(rolling_std.index, rolling_std, label="Rolling Std")
+    plt.xlabel("Date")
+    plt.ylabel("Volatility")
+    plt.title("Rolling Mean and Standard Deviation of Volatility Data")
+    plt.legend()
+    plt.grid(True)
+    plt.show()

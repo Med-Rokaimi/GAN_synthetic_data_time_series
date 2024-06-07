@@ -17,17 +17,6 @@ def levy_solver(r, m, v, lam, sigma, T, steps, Npaths):
     return out
 
 
-def generate_noise(noise_size, batch_size, noise_type, rs):
-    noise = []
-    if noise_type == 'gbm':
-
-        noise = gbm_paths = generate_gbm_paths(noise_size, batch_size)
-
-    elif noise_type == 'normal':
-        noise = rs.normal(0, 1, (batch_size, noise_size))
-
-    return torch.tensor(noise, dtype=torch.float32)
-
 
 def generate_gbm_paths(noise_size, batch_size, T=1.0, mu=0.02, sigma=0.1):
     """
@@ -132,45 +121,68 @@ def alpha_levy_jump_path_gpt(T, N, alpha=1.5, mu=0.1, sigma=0.2, jump_lambda=0.5
     return t, X
 
 
-def generate_noise_(batch_size, noise_dim, noise_type='gaussian', params=None):
+def generate_noise(noise_size, batch_size, noise_type='gaussian', rs=None, params= None):
+    noise = []
     """
     Generate noise for the GAN generator.
 
     Args:
         batch_size (int): Number of samples in the batch.
-        noise_dim (int): Dimension of the noise vector.
+        noise_size (int): Dimension of the noise vector.
         noise_type (str): Type of noise ('gaussian', 'uniform', 'levy', 'poisson', 'garch').
-        params (dict): Additional parameters for the noise generation.
+        rs (nmupy seed): 
 
     Returns:
         torch.Tensor: Generated noise.
     """
     if noise_type == 'gaussian':
-        return torch.randn(batch_size, noise_dim)
+        return torch.randn(batch_size, noise_size)
 
     elif noise_type == 'uniform':
-        return torch.rand(batch_size, noise_dim) * 2 - 1  # Uniform between -1 and 1
-
-    elif noise_type == 'levy':
-        alpha = params.get('alpha', 1.5)
-        beta = params.get('beta', 0.0)
-        scale = params.get('scale', 1.0)
-        loc = params.get('loc', 0.0)
-        #dist = torch.distributions.stable(alpha, beta, scale, loc)
-        #return dist.sample((batch_size, noise_dim))
-        pass
+        return torch.rand(batch_size, noise_size) * 2 - 1  # Uniform between -1 and 1
 
     elif noise_type == 'poisson':
         rate = params.get('rate', 1.0)
-        return torch.poisson(rate * torch.ones(batch_size, noise_dim))
+        return torch.poisson(rate * torch.ones(batch_size, noise_size))
 
     elif noise_type == 'garch':
-        # Assume params contains the conditional volatilities from a fitted GARCH model
-        conditional_volatility = params.get('conditional_volatility', torch.ones(batch_size, noise_dim))
-        return conditional_volatility * torch.randn(batch_size, noise_dim)
+        conditional_volatility = params.get('conditional_volatility', torch.ones(batch_size, noise_size))
+        return conditional_volatility * torch.randn(batch_size, noise_size)
+
+    elif noise_type == 'garch_1':
+        conditional_volatility = params.get('conditional_volatility', torch.ones(batch_size, noise_size))
+        return conditional_volatility
+
+    if noise_type == 'gbm':
+
+        noise  = generate_gbm_paths(noise_size, batch_size)
+
+    elif noise_type == 'normal':
+        noise = rs.normal(0, 1, (batch_size, noise_size))
+
+    elif noise_type == 'garch':
+        pass
+
+    elif noise_type == 'Merton':
+        pass
+
+    elif noise_type == 'Merton_edited':
+        pass
+
+    elif noise_type == 'ou':
+        pass
+
+    elif noise_type == 'levy_stable':
+        pass
 
     else:
         raise ValueError(f"Unsupported noise type: {noise_type}")
+
+
+    return torch.tensor(noise, dtype=torch.float32)
+
+
+
 
 '''
 
@@ -186,3 +198,14 @@ poisson_noise = generate_noise(batch_size, noise_dim, noise_type='poisson', para
 # garch_noise = generate_noise(batch_size, noise_dim, noise_type='garch', params={'conditional_volatility': your_conditional_volatility})
 
 '''
+def print_merton_example(r = 0.02 , v = 0.02, m = 0.02, lam = 0.02, sigma= 0.02 ):
+    import matplotlib.pyplot as plt
+    merton_ou = levy_solver(r=torch.tensor(r), v=torch.tensor(v), m=torch.tensor(m),
+                            lam=torch.tensor(lam), sigma=torch.tensor(sigma), T=1, steps=16,
+                            Npaths=10)
+    plt.plot(merton_ou)
+    plt.xlabel('Days')
+    plt.ylabel(' Price')
+    plt.title(' Jump Diffusion Process')
+    plt.show()
+    #plt.savefig(saved_model_path + "merton:jump.jpg")

@@ -28,19 +28,15 @@ from torch.autograd import Variable, grad
 
 from SDEs.sdes import levy_solver, generate_noise
 from utils.evaluation import calc_crps, metric, plot_trues_preds, plot_distibuation, save_results
-from data.data import data_prep
+from data.data import data_prep, create_dataset
 from utils.helper import save
+from utils.layer import LipSwish
+
 
 device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-torch.manual_seed(4)
-rs = np.random.RandomState(4)
 
-result_path = "./results/SDE_CGAN_v2/"
-saved_model_path = ""
-
-
-class Generator_LSTM_LEVY(nn.Module):
+class Generator(nn.Module):
     def __init__(self, hidden_dim, feature_no, seq_len):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -50,16 +46,20 @@ class Generator_LSTM_LEVY(nn.Module):
         self.dropout = 0.33
         self.mean, self.std = 0, 1
         self.seq_len = seq_len
+        self.LipSwish = LipSwish()
 
         # LSTM layers
         self.lstm = nn.LSTM(
             self.input_dim + noise_size, self.hidden_dim, self.layer_dim, batch_first=True, bidirectional=True,
             dropout=self.dropout
         )
+        #nn.init.xavier_normal(self.lstm.weight)
 
         # Fully connected layer
         self.fc_1 = nn.Linear(self.hidden_dim * 2, 12)
+        nn.init.xavier_normal(self.fc_1.weight)
         self.fc_2 = nn.Linear(12, self.output_dim)
+        nn.init.xavier_normal(self.fc_2.weight)
         self.relu = nn.ReLU()
         self.r = nn.Parameter(torch.tensor(0.02), requires_grad=False)
         self.m = nn.Parameter(torch.tensor(0.02), requires_grad=False)
@@ -83,26 +83,27 @@ class Generator_LSTM_LEVY(nn.Module):
 
         out = out[:, -1, :]
         out = self.fc_1(out)
+        out = self.LipSwish(out)
         out = self.relu(out)
         out = self.fc_2(out)
         out = out * lev
-
         return out
-
 
 class Discriminator(nn.Module):
     def __init__(self, seq_len, hidden_dim):
         super().__init__()
         self.discriminator_latent_size = hidden_dim
         self.x_batch_size = seq_len
-        self.input_to_latent = nn.GRU(input_size=1, hidden_size=hidden_dim)
+        self.input_to_latent = nn.LSTM(input_size=1, hidden_size=hidden_dim)
+
 
         self.model = nn.Sequential(
-            nn.Linear(in_features=hidden_dim + seq_len, out_features=128),
+            nn.Linear(in_features=hidden_dim + seq_len, out_features=64),
+            #nn.init.xavier_normal(),
+            #nn.LayerNorm(hidden_dim),
             nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
+
+            LipSwish()
         )
 
     def forward(self, prediction, x_batch):
@@ -110,23 +111,16 @@ class Discriminator(nn.Module):
             prediction = prediction.unsqueeze(-1)
 
         x_batch = x_batch[:, :, 0]
-
         # Ensure prediction has the same batch size as x_batch
         prediction = prediction.view(x_batch.size(0), -1)
-
         # Concatenate x_batch and prediction along the sequence length dimension
         d_input = torch.cat((x_batch, prediction), dim=1)
-
         d_input = d_input.unsqueeze(-1)
         d_input = d_input.transpose(0, 1)
-
         d_latent, _ = self.input_to_latent(d_input)
         d_latent = d_latent[-1]
-
         d_input_flat = torch.cat((d_latent, x_batch.view(x_batch.size(0), -1)), dim=1)
-
         output = self.model(d_input_flat)
-
         return output
 
 
@@ -152,9 +146,7 @@ def generate_sde_motion(noise_size, x_batch):
 
 def generate_fake_samples(generator, noise_size, x_batch):
     noise_batch = generate_noise(noise_size, x_batch.size(0), noise_type, rs)
-
-    _ = generate_sde_motion(noise_size, x_batch)
-
+    #_ = generate_sde_motion(noise_size, x_batch)
     y_fake = generator(x_batch, noise_batch, x_batch.size(0)).detach()
 
     return x_batch, y_fake
@@ -189,10 +181,12 @@ def compute_gradient_penalty(discriminator, real_samples, fake_samples, x_batch)
 def train(best_crps):
     print("epochs", epochs)
 
-    lambda_gp = 10
+    lambda_gp = 0.00001
+
 
     for step in range(epochs):
-        for _ in range(5):  # Update the discriminator more frequently
+
+        for _ in range(2):
             x_batch, y_batch = load_real_samples(batch_size)
 
             discriminator.zero_grad()
@@ -207,7 +201,7 @@ def train(best_crps):
             d_loss = d_real_loss + d_fake_loss + lambda_gp * gradient_penalty
             d_loss.backward()
 
-            optimizer_d.step()
+        optimizer_d.step()
 
         generator.zero_grad()
         noise_batch = generate_noise(noise_size, batch_size, noise_type, rs)
@@ -250,28 +244,32 @@ def train(best_crps):
 
 if __name__ == '__main__':
 
-    df = pd.read_csv('dataset/oil.csv')
+    torch.manual_seed(2020)
+    rs = np.random.RandomState(4)
+
+    result_path = "./results/SDE_CGAN_v2/"
+    saved_model_path = ""
+    dataset = 'brent.csv'
+
+    df = pd.read_csv('dataset/' + dataset)
     df = df[6:]
     df = df[['Price', 'SENT']]
+    target = 'Price'
 
-    seq_len, pred_len, feature_no = 10, 1, len(df.columns)
+    seq_len, pred_len, feature_no = 16, 1, len(df.columns)
 
-    dim = 128
-    epochs = 20000
+    epochs = 10000
     batch_size = 16
     noise_size = 16
     noise_type = 'normal'
-    generator_latent_size = 8
+    generator_latent_size = 12
     discriminator_latent_size = 64
-    save_model = True
+    save_model = False
 
     train_size, valid_size, test_size = 2000, 180, 200
+    data = create_dataset(df, target, train_size, valid_size, test_size, seq_len, pred_len)
 
-    data = data_prep(df, seq_len, pred_len, train_size, valid_size, test_size)
-    print(data['X_test'].shape)
-    print(data['y_test'].shape)
-
-    generator = Generator_LSTM_LEVY(
+    generator = Generator(
         hidden_dim=generator_latent_size, feature_no=feature_no, seq_len=seq_len).to(device)
 
     discriminator = Discriminator(seq_len=seq_len,
@@ -285,8 +283,8 @@ if __name__ == '__main__':
     x_val = torch.tensor(data['X_valid'], device=device, dtype=torch.float32)
     y_val = data['y_valid']
 
-    optimizer_g = torch.optim.RMSprop(generator.parameters(), lr=0.00005)
-    optimizer_d = torch.optim.RMSprop(discriminator.parameters(), lr=0.00005)
+    optimizer_g = torch.optim.RMSprop(generator.parameters(), lr=0.003)
+    optimizer_d = torch.optim.RMSprop(discriminator.parameters(), lr=0.003)
 
     best_crps = np.inf
 
@@ -296,8 +294,6 @@ if __name__ == '__main__':
         saved_model_path, trained_model = train(best_crps)
     else:
         print('training mode is off')
-
-    if save_model:
         print(saved_model_path, "has been loaded")
         checkpoint = torch.load(saved_model_path)
         generator.load_state_dict(checkpoint['g_state_dict'])

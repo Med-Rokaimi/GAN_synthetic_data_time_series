@@ -180,7 +180,20 @@ def generate_fake_samples(generator, noise_size, x_batch, garch_volatility):
 
     return x_batch, y_fake
 
+def visualize_samples(generator, x_val, noise_size, noise_type, rs, step):
+    with torch.no_grad():
+        generator.eval()
+        noise_batch = generate_noise(noise_size, x_val.size(0), noise_type, rs)
+        generated_samples = generator(x_val, noise_batch, batch_size=1).cpu().detach().numpy()
+        generator.train()
 
+    plt.figure(figsize=(10, 5))
+    for i in range(min(10, generated_samples.shape[0])):
+        plt.subplot(2, 5, i + 1)
+        plt.imshow(generated_samples[i].squeeze(), cmap='gray')
+        plt.axis('off')
+    plt.suptitle(f'Generated Samples at Step {step}')
+    plt.show()
 def compute_gradient_penalty(discriminator, real_samples, fake_samples, x_batch):
     alpha = torch.rand(real_samples.size(0), 1, device=real_samples.device)
     alpha = alpha.unsqueeze(-1).unsqueeze(-1)
@@ -315,6 +328,8 @@ def train(best_crps):
 
             print("step : {} , d_loss : {} , g_loss : {}, crps : {}, best crps : {}".format(step, d_loss.item(), g_loss,
                                                                                             crps, best_crps))
+            # Visualize generated samples
+            visualize_samples(generator, x_val, noise_size, noise_type, rs, step)
 
         scheduler_g.step()
         scheduler_d.step()
@@ -326,7 +341,7 @@ def train(best_crps):
 
 if __name__ == '__main__':
 
-    df = pd.read_csv('dataset/oil.csv')
+    df = pd.read_csv('dataset/brent.csv')
     df = df[6:]
     df = df[['Price', 'SENT']]
 
@@ -340,10 +355,11 @@ if __name__ == '__main__':
     generator_latent_size = 8
     discriminator_latent_size = 64
     save_model = True
+    target = 'Price'
 
     train_size, valid_size, test_size = 2000, 180, 200
 
-    data = data_prep(df, seq_len, pred_len, train_size, valid_size, test_size)
+    data = data_prep(df, target, seq_len, pred_len, train_size, valid_size, test_size)
     print(data['X_test'].shape)
     print(data['y_test'].shape)
 

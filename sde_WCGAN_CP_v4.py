@@ -1,7 +1,9 @@
 '''
-version info:
-SDE_CGAN_v1:
- - integrating a noise vector. the noise vector is conctanted with the condition x. the output is feded to the LSTM
+
+Added the GP and loss from
+https://github.com/hanyoseob/pytorch-WGAN-GP/blob/master/layer.py#L266
+
+added :LipSwish
 '''
 
 import torch
@@ -17,6 +19,7 @@ from data.data import create_dataset
 from utils.helper import save, create_exp, append_to_excel
 from utils.layer import LipSwish
 
+
 class Generator(nn.Module):
     def __init__(self, hidden_dim, feature_no, seq_len, output_dim, dropout):
         super().__init__()
@@ -28,7 +31,7 @@ class Generator(nn.Module):
         self.dropout = dropout
         self.mean, self.std = 0, 1
         self.seq_len = seq_len
-        self.lipSwish = LipSwish()
+        self.LipSwish = LipSwish()
 
         # LSTM layers
         self.lstm = nn.LSTM(
@@ -71,7 +74,7 @@ class Generator(nn.Module):
 
         # Convert the final state to our desired output shape (batch_size, output_dim)
         out = self.fc_1(out)  # first dense
-        #out = self.lipSwish(out)
+        out = self.LipSwish(out)
         out = self.relu(out)  # relu
         # print(lev[0:5])
 
@@ -94,9 +97,8 @@ class Discriminator(nn.Module):
 
         self.model = nn.Sequential(
             nn.Linear(in_features=hidden_dim, out_features=1),
-            nn.Sigmoid(),
-            #LipSwish(),
-
+            nn.ReLU(),
+            LipSwish()
         )
 
     def forward(self, prediction, x_batch):
@@ -168,16 +170,16 @@ def train(best_crps):
         # train D on real samples
         discriminator.zero_grad()
         d_real_decision = discriminator(y_batch, x_batch)
-        d_real_loss = adversarial_loss(d_real_decision,
-                                       torch.full_like(d_real_decision, 1, device=device))
+         # WGAN Loss
+        d_real_loss = torch.mean(d_real_decision)
+
         d_real_loss.backward()
         d_loss += d_real_loss.detach().cpu().numpy()
 
         # train discriminator on fake data
         x_batch, y_fake = generate_fake_samples(generator, noise_size, x_batch)
         d_fake_decision = discriminator(y_fake, x_batch)
-        d_fake_loss = adversarial_loss(d_fake_decision,
-                                       torch.full_like(d_fake_decision, 0, device=device))
+        d_fake_loss = -torch.mean(d_fake_decision)
         d_fake_loss.backward()
 
         optimizer_d.step()
@@ -231,6 +233,9 @@ def train(best_crps):
 
 if __name__ == '__main__':
 
+
+
+
     #################################################
     # General settings
     #################################################
@@ -248,7 +253,7 @@ if __name__ == '__main__':
         epochs=10000,
         pred_len=1,
         seq_len=10,
-        n_critic = 5,
+        n_critic= 5,
         model_name="SDE_CGAN_v1",
         dataset=dataset,
         crps=0.5,
