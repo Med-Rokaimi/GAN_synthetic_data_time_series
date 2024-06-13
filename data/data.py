@@ -1,4 +1,3 @@
-import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import numpy as np
 import torch
@@ -16,14 +15,11 @@ def create_dataset(df, target, train_size, valid_size, test_size, seq_len, pred_
     data = data_prep(df, target, seq_len, pred_len, train_size, valid_size, test_size)
     return data
 
-def grach_model(ts, horizon = 30):
+def grach_model(ts, target, horizon = 30):
 
-    #normlise
-    ts = ss.fit_transform(ts)
-    ts = pd.DataFrame(ts)
 
     # Calculate log returns
-    returns = np.log(ts).diff().dropna()
+    returns = np.log(ts[target]).diff().dropna()
     # Fit the GARCH(1, 1) model
     model = arch_model(returns, vol="Garch", p=1, q=1)
     results  = model.fit()
@@ -36,7 +32,7 @@ def grach_model(ts, horizon = 30):
     forecast = results.forecast(start=0, horizon=horizon)
     forecast_volatility = forecast.variance.dropna().values.flatten()
 
-    return returns, estimated_volatility, forecast_volatility
+    return {'returns':returns, 'estimated_volatility':estimated_volatility, 'forecast_volatility':forecast_volatility}
 
 def split_sequences(input_sequences, output_sequence, n_steps_in, n_steps_out):
     X, y = list(), list() # instantiate X and y

@@ -1,11 +1,12 @@
 import torch
 import numpy as np
+import torch.nn as nn
 
 from data.data import grach_model
 
-torch.manual_seed(4)
 
-
+#Merton jump path with minor modification in
+# poi_rv = torch.mul(poisson, torch.normal(m, v).cumsum(dim=0))
 def levy_solver(r, m, v, lam, sigma, T, steps, Npaths):
     dt = T / steps
     rates = torch.rand(steps, Npaths)
@@ -20,34 +21,30 @@ def levy_solver(r, m, v, lam, sigma, T, steps, Npaths):
     return out
 
 
-def generate_noise(noise_size, batch_size, noise_type, rs, params=None):
-    noise = []
-    if noise_type == 'gbm':
+'''
+def merton_jump_paths(T, r, sigma, lam, m, v, steps, Npaths):
+    size = (steps, Npaths)
+    dt = T / steps
+    poi_rv = np.multiply(np.random.poisson(lam * dt, size=size),
+                         np.random.normal(m, v, size=size)).cumsum(axis=0)
+    geo = np.cumsum(((r - sigma ** 2 / 2 - lam * (m + v ** 2 * 0.5)) * dt +
+                     sigma * np.sqrt(dt) *
+                     np.random.normal(size=size)), axis=0)
 
-        noise = generate_gbm_paths(noise_size, batch_size)
-
-    elif noise_type == 'normal':
-        noise = rs.normal(0, 1, (batch_size, noise_size))
-
-    elif noise_type == 'uniform':
-        return torch.rand(batch_size, noise_size) * 2 - 1  # Uniform between -1 and 1
-
-    else:
-        raise ValueError(f"Unsupported noise type: {noise_type}")
-
-
-    return torch.tensor(noise, dtype=torch.float32)
-
+    return np.exp(geo + poi_rv)
+'''
 
 def generate_gbm_paths(noise_size, batch_size, T=1.0, mu=0.02, sigma=0.1):
     """
     Generate Geometric Brownian Motion paths.
+
     Parameters:
     batch_size (int): Number of paths to generate.
     noise_size (int): Number of steps in each path.
     T (float): Time period.
     mu (float): Drift.
     sigma (float): Volatility.
+
     Returns:
     torch.Tensor: Simulated GBM paths of shape (batch_size, noise_size).
     """
@@ -66,7 +63,7 @@ def generate_gbm_paths(noise_size, batch_size, T=1.0, mu=0.02, sigma=0.1):
 
 
 
-class OrnsteinUhlenbeckSDE(torch.nn.Module):
+class OrnsteinUhlenbeckSDE(nn.Module):
         sde_type = 'ito'
         noise_type = 'scalar'
 
@@ -128,10 +125,9 @@ def alpha_levy_jump_path_gpt(T, N, alpha=1.5, mu=0.1, sigma=0.2, jump_lambda=0.5
     t = torch.linspace(0, T, N + 1)
     W = torch.zeros(N + 1)
     J = torch.zeros(N + 1)
-    N = torch.tensor(N)
 
     for i in range(1, N + 1):
-        W[i] = torch.tensor(W[i - 1]) + torch.tensor(torch.normal(mean=torch.tensor(0.0), std=torch.tensor(torch.sqrt(dt))))
+        W[i] = W[i - 1] + torch.normal(mean=0.0, std=torch.sqrt(dt))
         if torch.rand(1).item() < jump_lambda * dt:
             J[i] = J[i - 1] + torch.distributions.stable.Stable(alpha, 0, jump_sigma, jump_mu).sample()
         else:
@@ -139,6 +135,70 @@ def alpha_levy_jump_path_gpt(T, N, alpha=1.5, mu=0.1, sigma=0.2, jump_lambda=0.5
 
     X = mu * t + sigma * W + J
     return t, X
+
+
+def generate_noise(noise_size, batch_size, noise_type='gaussian', rs=None, params= None):
+    noise = []
+    """
+    Generate noise for the GAN generator.
+
+    Args:
+        batch_size (int): Number of samples in the batch.
+        noise_size (int): Dimension of the noise vector.
+        noise_type (str): Type of noise ('gaussian', 'uniform', 'levy', 'poisson', 'garch').
+        rs (nmupy seed): 
+
+    Returns:
+        torch.Tensor: Generated noise.
+    """
+    if noise_type == 'gaussian':
+        return torch.randn(batch_size, noise_size)
+
+    elif noise_type == 'uniform':
+        return torch.rand(batch_size, noise_size) * 2 - 1  # Uniform between -1 and 1
+
+    elif noise_type == 'poisson':
+        rate = params.get('rate', 1.0)
+        return torch.poisson(rate * torch.ones(batch_size, noise_size))
+
+    elif noise_type == 'garch':
+        conditional_volatility = params.get('conditional_volatility', torch.ones(batch_size, noise_size))
+        return conditional_volatility * torch.randn(batch_size, noise_size)
+
+    if noise_type == 'gbm':
+
+        noise  = generate_gbm_paths(noise_size, batch_size)
+
+    elif noise_type == 'normal':
+        noise = rs.normal(0, 1, (batch_size, noise_size))
+
+    elif noise_type == 'garch_me':
+        _, noise, _ = grach_model(params.get('ts', 'target'), horizon=1)
+
+    elif noise_type == 'Merton':
+        noise = merton_jump_paths(T=1, r=0.02, sigma=0.02, lam=0.02, m=0.02, v=0.02, steps=noise_size, Npaths=1)
+
+    elif noise_type == 'Merton_edited':
+        pass
+        #noise = levy_solver(r=0.02, m=0.02, v=0.02, lam=0.02, sigma=0.02, T=1, steps=noise_size, Npaths=1)
+
+
+    elif noise_type == 'ou':
+        pass
+
+    elif noise_type == 'levy_stable':
+        alpha_levy_jump_path_gpt(noise_size, 1, alpha=1.5, mu=0.1, sigma=0.2, jump_lambda=0.5, jump_sigma=0.1, jump_mu=0.1)
+
+
+    else:
+        raise ValueError(f"Unsupported noise type: {noise_type}")
+
+
+    return torch.tensor(noise, dtype=torch.float32)
+
+
+
+
 '''
 
 # Example usage
@@ -151,4 +211,18 @@ levy_noise = generate_noise(batch_size, noise_dim, noise_type='levy',
 poisson_noise = generate_noise(batch_size, noise_dim, noise_type='poisson', params={'rate': 5.0})
 # For GARCH, you need to have the conditional volatilities from your fitted GARCH model
 # garch_noise = generate_noise(batch_size, noise_dim, noise_type='garch', params={'conditional_volatility': your_conditional_volatility})
+
 '''
+def print_merton_example(r = 0.02 , v = 0.02, m = 0.02, lam = 0.02, sigma= 0.02 ):
+    import matplotlib.pyplot as plt
+    merton_ou = levy_solver(r=torch.tensor(r), v=torch.tensor(v), m=torch.tensor(m),
+                            lam=torch.tensor(lam), sigma=torch.tensor(sigma), T=1, steps=16,
+                            Npaths=10)
+    plt.plot(merton_ou)
+    plt.xlabel('Days')
+    plt.ylabel(' Price')
+    plt.title(' Jump Diffusion Process')
+    plt.show()
+    #plt.savefig(saved_model_path + "merton:jump.jpg")
+
+

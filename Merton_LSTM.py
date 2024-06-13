@@ -240,21 +240,3 @@ if __name__ == '__main__':
 
     plot_trues_preds(trues, preds)
     metrics = metric(trues, preds)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

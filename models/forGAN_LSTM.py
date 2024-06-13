@@ -180,14 +180,14 @@ def train(best_crps):
             if crps <= best_crps:
                 best_crps = crps
                 torch.save({'g_state_dict': generator.state_dict()},
-                           "./results/forGAN/best.torch")
+                           "../results/forGAN/best.torch")
 
             print("step : {} , d_loss : {} , g_loss : {}, crps : {}, best crps : {}".format(step, d_loss, g_loss, crps,
                                                                                             best_crps))
 
 
 if __name__ == '__main__':
-    df = pd.read_csv('dataset/oil.csv')
+    df = pd.read_csv('../dataset/oil.csv')
     df = df[6:]
     df = df[['Price', 'SENT']]
 
@@ -264,7 +264,7 @@ if __name__ == '__main__':
 
     metrics = metric(trues, preds)
 
-    save_results(trues, preds, metrics, './results/forGAN/')
+    save_results(trues, preds, metrics, '../results/forGAN/')
     plt.savefig("./results/forGAN/" + str(best_crps) + ".jpg")
 
 

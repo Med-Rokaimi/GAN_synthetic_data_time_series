@@ -10,5 +10,14 @@ Config = namedtuple('Config', ['epochs',
         'noise_size',
         'noise_type',
         'generator_latent_size',
-        'discriminator_latent_size', 'loss', 'sde'
+        'discriminator_latent_size', 'loss', 'seeds', 'sde'
+])
+
+
+
+
+Config1 = namedtuple('Config', ['epochs',
+    'pred_len', 'seq_len', 'n_critic','model_name', 'dataset',
+    'crps', 'metrics', 'optimiser', 'lr',
+    'dropout', 'hidden_units1', 'hidden_units2', 'sde_parameters'
 ])

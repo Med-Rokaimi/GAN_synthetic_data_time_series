@@ -1,3 +1,9 @@
+'''
+version info:
+SDE_CGAN_v1:
+ - integrating a noise vector. the noise vector is conctanted with the condition x. the output is feded to the LSTM
+'''
+
 import torch
 from torch import nn
 import pandas as pd
@@ -5,32 +11,29 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from SDEs.sdes import levy_solver, generate_noise
-from utils.evaluation import calc_crps, metric, plot_trues_preds, plot_distibuation, save_results
-from data.data import data_prep
-from utils.helper import save
+from args.config import Config1
+from utils.evaluation import calc_crps, metric, plot_trues_preds, plot_distibuation, save_results, \
+    plot_distibuation_all, plot_err_histogram
+from data.data import create_dataset
+from utils.helper import save, create_exp, append_to_excel, save_config_to_excel
+from utils.layer import LipSwish
 
-device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-
-torch.manual_seed(4)
-rs = np.random.RandomState(4)
-
-result_path = "./results/SDE_CGAN/"
-saved_model_path = ""
-
-
-class Generator_LSTM_LEVY(nn.Module):
-    def __init__(self, hidden_dim, feature_no):
+class Generator(nn.Module):
+    def __init__(self, hidden_dim, feature_no, seq_len, output_dim, dropout):
         super().__init__()
 
         self.hidden_dim = hidden_dim
         self.layer_dim = 1
         self.input_dim = feature_no
-        self.output_dim = 1
-        self.dropout = 0.3
+        self.output_dim = output_dim
+        self.dropout = dropout
+        self.mean, self.std = 0, 1
+        self.seq_len = seq_len
+        self.lipSwish = LipSwish()
 
         # LSTM layers
         self.lstm = nn.LSTM(
-            self.input_dim, self.hidden_dim, self.layer_dim, batch_first=True, bidirectional=True, dropout=self.dropout
+            self.input_dim + noise_size, self.hidden_dim, self.layer_dim, batch_first=True, bidirectional=True, dropout=self.dropout
         )
 
         # Fully connected layer
@@ -43,15 +46,25 @@ class Generator_LSTM_LEVY(nn.Module):
         self.lam = nn.Parameter(torch.tensor(0.02), requires_grad=True)
         self.sigma = nn.Parameter(torch.tensor(0.02), requires_grad=True)
 
-    def forward(self, x, batch_size):
-        lev = levy_solver(self.r, self.m, self.v, self.lam, self.sigma, self.output_dim, batch_size, 1)
+    def forward(self, x, noise, batch_size): # x = [16, 10, 2]
+
+        x = (x-self.mean)/self.std
 
         h0 = torch.zeros(self.layer_dim * 2, x.size(0), self.hidden_dim, device=x.device).requires_grad_()
         # could be an SDE noise as SDE-GAN does ملاحظة
         c0 = torch.zeros(self.layer_dim * 2, x.size(0), self.hidden_dim, device=x.device).requires_grad_()
+        lev = levy_solver(self.r, self.m, self.v, self.lam, self.sigma, self.output_dim, batch_size, 1)
 
-        # x = torch.cat((x, mm), dim=2)
-        out, (hn, cn) = self.lstm(x, (h0, c0))
+        # Downsample the noise to match the sequence length of x_batch
+        noise_downsampled = noise.unsqueeze(1).expand(-1, self.seq_len, -1)  # Shape: (batch_size, seq_length, noise_dim)
+        noise_downsampled = noise_downsampled[:, :self.seq_len, :]  # Downsample to match the sequence length
+
+        # Concatenate the noise with the input features along the feature dimension
+        x_combined = torch.cat((x, noise_downsampled),
+                               dim=-1)  # Shape: (batch_size, seq_length, features_number + noise_dim)
+
+        out, (hn, cn) = self.lstm(x_combined, (h0, c0))
+
 
         # Reshaping the outputs in the shape of (batch_size, seq_length, hidden_size)
         # so that it can fit into the fully connected layer
@@ -59,6 +72,7 @@ class Generator_LSTM_LEVY(nn.Module):
 
         # Convert the final state to our desired output shape (batch_size, output_dim)
         out = self.fc_1(out)  # first dense
+        #out = self.lipSwish(out)
         out = self.relu(out)  # relu
         # print(lev[0:5])
 
@@ -66,6 +80,9 @@ class Generator_LSTM_LEVY(nn.Module):
         out = out * lev
 
         return out
+
+
+
 
 
 class Discriminator(nn.Module):
@@ -78,7 +95,9 @@ class Discriminator(nn.Module):
 
         self.model = nn.Sequential(
             nn.Linear(in_features=hidden_dim, out_features=1),
-            nn.Sigmoid()
+            nn.Sigmoid(),
+            #LipSwish(),
+
         )
 
     def forward(self, prediction, x_batch):
@@ -126,27 +145,24 @@ def generate_sde_motion(noise_size, x_batch):
 
 
 def generate_fake_samples(generator, noise_size, x_batch):
-    # generate points in latent space
 
-    # noise_batch = torch.tensor(rs.normal(0, 1, (batch_size, noise_size)),
-    # device=device, dtype=torch.float32)
     noise_batch = generate_noise(noise_size, x_batch.size(0), noise_type, rs)
 
     # print("noise_batch shape", noise_batch.shape)
-    sde = generate_sde_motion(noise_size, x_batch)
+    _ = generate_sde_motion(noise_size, x_batch)
 
-    y_fake = generator(x_batch, x_batch.size(0)).detach()
+    y_fake = generator(x_batch, noise_batch, x_batch.size(0)).detach()
     # labels = zeros((x_batch.size(0), 1))  #Label=0 indicating they are fake
     return x_batch, y_fake
 
 
 def train(best_crps):
-    print("epochs", epochs)
+    print("epochs", config.epochs)
+    import time
+    start_time = time.time()  # Record the start time
 
-    for step in range(epochs):
-
+    for step in range(config.epochs):
         d_loss = 0
-
         # load real samples
         # x_bach = batch x seq_len x feature_no [16, 10, 2]
         # y_batch = batch_size x pred_len  [16, 1]
@@ -176,8 +192,8 @@ def train(best_crps):
         # noise_batch = torch.tensor(rs.normal(0, 1, (batch_size, noise_size)), device=device,
         # dtype=torch.float32)
         noise_batch = generate_noise(noise_size, batch_size, noise_type, rs)
-        sde = generate_sde_motion(noise_size, x_batch)
-        y_fake = generator(x_batch, batch_size)
+        _ = generate_sde_motion(noise_size, x_batch)
+        y_fake = generator(x_batch, noise_batch, batch_size)
 
         # print("y_fake", y_fake.shape)
         d_g_decision = discriminator(y_fake, x_batch)
@@ -194,11 +210,9 @@ def train(best_crps):
                 generator.eval()
                 predictions = []
                 for _ in range(200):
-                    noise_batch = torch.tensor(rs.normal(0, 1, (x_val.size(0), noise_size)),
-                                               device=device,
-                                               dtype=torch.float32)
-                    # predictions.append(generator(noise_batch, x_val, sde = generate_sde_motion(noise_size, x_batch)).cpu().detach().numpy())
-                    predictions.append(generator(x_val, batch_size=1
+                    noise_batch = generate_noise(noise_size,x_val.size(0),noise_type, rs)
+
+                    predictions.append(generator(x_val, noise_batch, batch_size=1
                                                  ).cpu().detach().numpy())
 
                 predictions = np.stack(predictions)
@@ -213,61 +227,116 @@ def train(best_crps):
 
             print("step : {} , d_loss : {} , g_loss : {}, crps : {}, best crps : {}".format(step, d_loss, g_loss, crps,
                                                                                             best_crps))
-    saved_model_path = save(generator, result_path, str(best_crps), save_model)
-
-    return saved_model_path, generator
+            end_time = time.time()  # Record the end time
+            runtime = end_time - start_time  # Calculate the runtime
+    saved_model_path = save(generator, ex_results_path, str(best_crps), save_model)
+    return saved_model_path, generator, runtime
 
 
 if __name__ == '__main__':
 
-    df = pd.read_csv('dataset/oil.csv')
-    df = df[6:]
-    df = df[['Price', 'SENT']]
+    #################################################
+    # General settings
+    #################################################
 
-    seq_len, pred_len, feature_no = 10, 1, len(df.columns)
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+    torch.manual_seed(4)
+    rs = np.random.RandomState(4)
+    result_path = "../../results"
+    saved_model_path = ""
+    dataset = "brent"    #WTI, BRENT
+    dataset_path = 'dataset/' + dataset + '.csv'
+    model_decriptipn = 'CGAN + Merton Jump '
+
+    config = Config1(
+        epochs=7700,
+        pred_len=1,
+        seq_len=10,
+        n_critic = 1,
+        model_name="SDE_CGAN",
+        dataset=dataset,
+        crps=0.5,
+        metrics={"mse": None, "rmse": None},
+        optimiser=None,
+        lr=0.001,
+        dropout=0.33,
+        hidden_units1=64,
+        hidden_units2=32,
+        sde_parameters={"param1": 0.1, "param2": 0.2}
+    )
+
+    # create a new job
+    jobID, ex_results_path = create_exp(result_path , 'exp.csv', config.model_name)
 
     dim = 128
-    epochs = 10000
+
     batch_size = 16
-    noise_size = 32
-    noise_type = 'normal'
-    generator_latent_size = 4
+    noise_size = 16
+    noise_type = 'normal'  # normal, gbm
+    generator_latent_size = 8
     discriminator_latent_size = 64
-    save_model = True
+    save_model = False
+
+
+    #################################################
+    # Dataset
+    #################################################
+
+    df = pd.read_csv(dataset_path)
+    data, features = {}, []
+
+    if dataset == 'brent':
+        features = ['Price', 'SENT']
+        df = df[features]
+    elif dataset == 'brent':
+        features = ['WTI', 'SENT']
+        df = df[features]
+        df = df.rename(columns={'WTI': 'Price'})
+    else:
+        print("unknown dataset name")
 
     train_size, valid_size, test_size = 2000, 180, 200
+    data = create_dataset(df, 'Price', train_size, valid_size, test_size, config.seq_len, config.pred_len)
 
-    data = data_prep(df, seq_len, pred_len, train_size, valid_size, test_size)
-    print(data['X_test'].shape)
-    print(data['y_test'].shape)
 
-    generator = Generator_LSTM_LEVY(
-        hidden_dim=generator_latent_size, feature_no=feature_no).to(device)
-
-    discriminator = Discriminator(seq_len=seq_len,
-                                  hidden_dim=discriminator_latent_size).to(device)
-
-    print(generator)
-    print(discriminator)
+    print(f"Data : {dataset}, {data['X_train'].shape} , {data['y_train'].shape}")
+    print()
 
     x_train = torch.tensor(data['X_train'], device=device, dtype=torch.float32)
     y_train = torch.tensor(data['y_train'], device=device, dtype=torch.float32)
     x_val = torch.tensor(data['X_valid'], device=device, dtype=torch.float32)
     y_val = data['y_valid']
 
+    #################################################
+    # Build the model
+    #################################################
+
+    generator = Generator(hidden_dim=generator_latent_size, feature_no=len(features),
+                          seq_len= config.seq_len, output_dim=config.pred_len, dropout=config.dropout).to(device)
+
+    discriminator = Discriminator(seq_len=config.seq_len,
+                                  hidden_dim=discriminator_latent_size).to(device)
+
+
     optimizer_g = torch.optim.RMSprop(generator.parameters())
     optimizer_d = torch.optim.RMSprop(discriminator.parameters())
     adversarial_loss = nn.BCELoss()
     adversarial_loss = adversarial_loss.to(device)
 
+    #################################################
+    # Training the model
+    #################################################
+
     best_crps = np.inf
-
     is_train = True
-
     if is_train:
-        saved_model_path, trained_model = train(best_crps)
+        saved_model_path, trained_model, runtime = train(best_crps)
     else:
         print('training mode is off')
+
+    #################################################
+    # Testing the model
+    #################################################
 
     if save_model:
         print(saved_model_path, "has been loaded")
@@ -279,31 +348,31 @@ if __name__ == '__main__':
 
     with torch.no_grad():
         generator.eval()
-        # noise_batch = torch.tensor(rs.normal(0, 1, (x_test.size(0), noise_size)), device=device,
-        # dtype=torch.float32)
         noise_batch = generate_noise(noise_size, x_test.size(0), noise_type, rs)
-        predictions.append(generator(x_test, batch_size=1).detach().cpu().numpy().flatten())
+        predictions.append(generator(x_test, noise_batch, batch_size=1).detach().cpu().numpy().flatten())
 
     predictions = np.stack(predictions).flatten()
-    # print("preds", predictions.shape)
-
     y_test = data['y_test'].flatten()
-    # print("trues and preds", y_test.shape, predictions.shape)
-
     trues = data['y_test'].flatten()
     preds = predictions.flatten()
-    plot_distibuation(trues, preds)
-    plot_trues_preds(trues, preds)
+
+    #################################################
+    # Ploting
+    #################################################
+
+    plot_distibuation(trues, preds,saved_model_path)
+    plot_trues_preds(trues, preds,saved_model_path)
     metrics = metric(trues, preds)
     '''
 
     for name, param in generator.state_dict().items():
         print(name, param.size(), param.data)
     print(f"sigma: {generator.sigma}, lam {generator.lam}, r {generator.r}")
+    '''
 
     save_results(trues, preds, metrics, saved_model_path)
 
-    '''
+
 
     merton_ou = levy_solver(r=torch.tensor(0.02), v=torch.tensor(0.02), m=torch.tensor(0.02),
                             lam=torch.tensor(generator.lam), sigma=torch.tensor(generator.sigma), T=1, steps=16,
@@ -315,4 +384,17 @@ if __name__ == '__main__':
     plt.show()
     plt.savefig(saved_model_path + "merton:jump.jpg")
 
+    plot_distibuation(trues, preds, saved_model_path)
+
+    # save result details with configs to exp.csv file
+    save_config_to_excel(jobID, saved_model_path, result_path + '/exp.csv', config, model_decriptipn,
+                         generator, metrics, {'train_size': train_size,
+                                              'valid_size': valid_size, 'test_size': test_size}, runtime)
+
+    # Plot distribution of actual and predicted values
+    plot_distibuation_all(trues, preds, saved_model_path)
+    plot_err_histogram(trues, preds, saved_model_path)
+
+    print(config)
+    print(df.columns)
 

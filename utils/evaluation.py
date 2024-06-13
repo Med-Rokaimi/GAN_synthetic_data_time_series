@@ -2,17 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from sklearn import metrics
 
 #Evluation, Calculate CRPS,
 def calc_crps(ground_truth, predictions, predictions2):
     return np.absolute(predictions - ground_truth).mean() - 0.5 * np.absolute(predictions - predictions2).mean()
-
-
-
-
-
-
-
 
 
 def model_evaluation_r(trues, preds):
@@ -29,7 +23,7 @@ def plot_trues_preds(trues, preds, path):
     plt.plot(preds)
     plt.title('tures vs plots')
     plt.legend(['trues', 'preds'], loc='upper left')
-    plt.savefig(path + 'line.png', bbox_inches='tight')
+    plt.savefig(path + '/line.png', bbox_inches='tight')
     plt.show()
 
 
@@ -44,6 +38,9 @@ def MAPE(pred, true):
 def MSPE(pred, true):
     return np.mean(np.square((pred - true) / true))
 
+def r_2(preds, trues):
+    return metrics.r2_score(trues, preds)  # R-Squared
+
 def metric(trues, preds):
     preds = np.round(preds, 2)
     trues = np.round(trues, 2)
@@ -52,8 +49,9 @@ def metric(trues, preds):
     rmse = RMSE(preds, trues)
     mspe = MSPE(preds, trues)
     mape = MAPE(preds, trues)
+    r2 = r_2(preds, trues)
     print(" MAE: {:.6f}  , MSE {:.6f}, RMSE {:.6f}, MSPE {:.6f}, MAPE {:.6f}".format(mae, mse ,rmse ,mspe ,mape))
-    return {'mae':mae,'mse':mse,'rmse':rmse, 'mspe':mspe, 'mape':mape}
+    return {'mae':mae,'mse':mse,'rmse':rmse, 'mspe':mspe, 'mape':mape, 'r2':r2}
 
 def plot_distibuation(trues, preds, path):
     f, axarr = plt.subplots(1, 1, figsize=(8, 8))
@@ -64,17 +62,17 @@ def plot_distibuation(trues, preds, path):
 
     plt.plot()
     plt.show()
-    plt.savefig(path + 'distrib.png')
+    plt.savefig(path + '/distrib.png')
 
 
 
 
 def save_results(trues, preds, scores, PATH):
 
-    np.save(PATH + 'preds.npy', preds)
-    np.save(PATH + 'trues.npy', trues)
-    name = '_scores_' + 'timestep_'
-    np.save(PATH + name +'.npy', scores)
+    np.save(PATH + '/preds.npy', preds)
+    np.save(PATH + '/trues.npy', trues)
+    name = str(f"scores_mse_{scores['mse']:.6f}")
+    np.save(PATH + '/' + name +'.npy', scores)
 
 
 def get_gradient_statistics(model):
@@ -95,18 +93,19 @@ def plot_samples(y_val, predictions, step ):
     plt.legend()
     plt.show()
 
-def plot_losses(gen_losses, critic_losses):
+def plot_losses(gen_losses, critic_losses, path):
     plt.figure(figsize=(10, 5))
-    plt.plot(gen_losses, label='Generator Mean Loss')
-    plt.plot(critic_losses, label='Critic Mean Loss')
+    plt.plot(gen_losses, label='Generator')
+    plt.plot(critic_losses, label='Discriminator')
     plt.xlabel('Epoch')
     plt.ylabel(' Loss')
-    plt.title(' Loss per Epoch')
+    plt.title('Generator and Critic Loss During Training')
     plt.legend()
+    plt.savefig(path + "/loss.png")
     plt.show()
 
 
-def plot_losses_avg(gen_losses, critic_losses):
+def plot_losses_avg(gen_losses, critic_losses, path):
     print( "  m " , len(critic_losses), len(gen_losses))
     mov_avg_gen_losses = [sum(gen_losses[i:i + 10]) / 10 for i in range(0, len(gen_losses), 10)]
     mov_avg_critic_losses = [sum(critic_losses[i:i + 10]) / 10 for i in range(0, len(critic_losses), 10)]
@@ -118,7 +117,10 @@ def plot_losses_avg(gen_losses, critic_losses):
     plt.title('Mean Loss per Epoch')
     plt.legend()
     plt.yscale('symlog')  # Use symlog scale to better visualize different magnitudes
+    plt.savefig(path + '/avg_loss.png')
     plt.show()
+
+
 def plot_losses_max(gen_max_losses, critic_max_losses):
     plt.figure(figsize=(10, 5))
     plt.plot(gen_max_losses, label='Generator Max Loss')
@@ -130,15 +132,16 @@ def plot_losses_max(gen_max_losses, critic_max_losses):
     plt.show()
 
 
-def plot_gradiants(gen_gradients, critic_gradients):
+def plot_gradiants(gen_gradients, critic_gradients, path):
 
     plt.figure(figsize=(10, 5))
     plt.plot(gen_gradients, label='Generator Gradients')
-    plt.plot(critic_gradients, label='Critic Gradients')
+    plt.plot(critic_gradients, label='Discriminator Gradients')
     plt.xlabel('Epoch')
     plt.ylabel('Gradient Magnitude')
     plt.title('Gradient Magnitude per Epoch')
     plt.legend()
+    plt.savefig(path + '/grad.png')
     plt.show()
 
 def plot_distibuation_all(trues, preds, path):
@@ -153,5 +156,39 @@ def plot_distibuation_all(trues, preds, path):
         plt.ylabel('Frequency')
         plt.title('Distribution of Actual and Predicted Values')
         plt.legend()
-        plt.savefig(path + 'distrib_all.png')
+        plt.savefig(path + '/distrib_all.png')
         plt.show()
+
+def plot_err_histogram(trues, preds, path):
+    # Calculate the forecast errors
+    errors = preds - trues
+
+    # Plot the histogram of forecast errors
+    plt.figure(figsize=(10, 6))
+    plt.hist(errors, bins=30, density=True)
+    plt.xlabel("Forecast Error")
+    plt.ylabel("Density")
+    plt.title("Histogram of Forecast Errors")
+    plt.grid(True)
+    plt.savefig(path + '/hist_err.png')
+
+    plt.show()
+
+
+def scatter_plot(trues, preds, path):
+    plt.scatter(trues, preds)
+    plt.xlabel('Actual Petal Width')
+    plt.ylabel('Predicted Petal Width')
+    plt.title('Actual vs Predicted Petal Width')
+    plt.savefig(path + '/scatter.png')
+    plt.show()
+
+def scatter_plot_res(trues, preds, path):
+    residuals = trues - preds
+    plt.scatter(preds, residuals)
+    plt.xlabel('Predicted Petal Width')
+    plt.ylabel('Residuals')
+    plt.title('Residual Plot')
+    plt.axhline(y=0, color='r', linestyle='--')
+    plt.savefig(path + '/scatter_res.png')
+    plt.show()

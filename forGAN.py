@@ -108,10 +108,6 @@ def train(best_crps):
 
 
 
-
-
-
-
 if __name__ == '__main__':
     df = pd.read_csv('dataset/oil.csv')
     df = df[6:]

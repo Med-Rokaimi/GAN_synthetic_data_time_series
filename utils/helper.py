@@ -15,7 +15,8 @@ def save(model, path , score, save_model):
     score = str(score)
 
     if save_model:
-        stamped_name__ = score + "_" + create_time_stamp() + ".torch"
+        #stamped_name__ = score + "_" + create_time_stamp() + ".torch"
+        stamped_name__ = score + ".torch"
         torch_model = os.path.join(path,stamped_name__)
         torch.save({'g_state_dict': model.state_dict()}, torch_model)
     else:
@@ -156,19 +157,20 @@ def append_to_excel(file_path, new_data):
 
 
 def save_config_to_excel(jobID, exp_path, results_folder, config, model_decriptipn, generator, metrics, dataset, runtime):
+
     data =  { 'jobID':jobID, 'timestamp': create_time_stamp() , 'path':exp_path,
               'Model': config.model_name,
               'epoch':config.epochs,
-               'Dataset': config.dataset,
+              'Dataset': config.dataset,
               'noise':config.noise_type, 'loss':config.loss,'sde':config.sde,
-              'crps':metrics['crps'], 'mse':metrics['mse'],
+              'crps':metrics['crps'], 'mse':metrics['mse'], 'metrics':metrics,
               'hidden_unites1': config.hidden_units1,
               'hidden_unites2': config.hidden_units2,
               'lr':config.lr, 'droupout': config.dropout,
               'pred_len': config.pred_len, 'seq_len':config.seq_len,
               'runtime':runtime, 'config':config,
               'sde_params': [generator.lam, generator.sigma],
-              'seeds':'', 'model_decription':model_decriptipn,
+              'seeds':config.seeds, 'model_decription':model_decriptipn,
               'dataset_shape':dataset}
 
     append_to_excel(results_folder,data)

@@ -1,5 +1,5 @@
 '''
-
+W Conditional Generative Adversarial Network
 
 '''
 
@@ -8,13 +8,18 @@ import torch
 from torch import nn
 import pandas as pd
 import numpy as np
-from torch.autograd import Variable, grad
+from torch.autograd import Variable,grad
 
 from data.data import grach_model
-from SDEs.sdes import levy_solver, generate_noise, print_merton_example
+from SDEs.sdes import levy_solver, generate_noise
 from args.config import Config
-from utils.evaluation import calc_crps, metric, plot_trues_preds, plot_distibuation, save_results, \
-    get_gradient_statistics, plot_samples, plot_losses, plot_losses_avg, plot_losses_max, plot_gradiants, plot_distibuation_all
+
+from utils.evaluation import calc_crps, metric, plot_trues_preds, plot_distibuation, save_results, scatter_plot, \
+    scatter_plot_res
+from utils.evaluation import get_gradient_statistics, plot_samples, plot_losses, plot_losses_avg
+from utils.evaluation import plot_losses_max, plot_gradiants, plot_distibuation_all, plot_err_histogram
+
+
 from data.data import create_dataset, data_to_tensor
 from utils.helper import save, create_exp, save_config_to_excel
 from utils.layer import LipSwish
@@ -24,7 +29,7 @@ device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("
 
 
 class Generator(nn.Module):
-    def __init__(self, hidden_dim, feature_no, seq_len, noise_size):
+    def __init__(self, hidden_dim, feature_no, seq_len, noise_size, batch_size):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.layer_dim = 1
@@ -36,7 +41,6 @@ class Generator(nn.Module):
         self.noise_size = noise_size
         self.LipSwish = LipSwish()
 
-        # LSTM layers
         self.lstm = nn.LSTM(
             self.input_dim + self.noise_size, self.hidden_dim, self.layer_dim, batch_first=True, bidirectional=True,
             dropout=self.dropout
@@ -151,15 +155,22 @@ def compute_gradient_penalty(critic, real_samples, fake_samples, x_batch):
 
 def train(best_crps, ex_results_path):
 
+    print("epochs", config.epochs)
+    best_mse = 20
+    best_g_loss = 20
+    itr = 0
+    best_gen = None
     import time
     start_time = time.time()  # Record the start time
-    gen_losses , critic_losses = [],[]
-    gen_max_losses, critic_max_losses = [],[]
-    gen_gradients , critic_gradients = [], []
+    gen_losses, critic_losses, d_loss = [], [], 0
+    gen_gradients, crit_gradients = [], []
 
     for step in range(config.epochs):
+
         d_loss_avg = 0
         for _ in range(config.n_critic):
+
+
             x_batch, y_batch = load_real_samples(config.batch_size)
             critic.zero_grad()
             d_real_decision = critic(y_batch, x_batch)
@@ -174,16 +185,13 @@ def train(best_crps, ex_results_path):
             d_loss = d_real_loss + d_fake_loss  + lambda_gp * gradient_penalty
 
             d_loss.backward()
-            d_loss_avg = d_loss_avg + d_loss.item()
-
+            d_loss_avg= d_loss_avg + d_loss.detach().cpu().numpy()
+            optimizer_d.step()
             # Track critic gradients
-            critic_gradients.append(
+            crit_gradients.append(
                 torch.mean(torch.stack([p.grad.norm() for p in critic.parameters() if p.grad is not None])).item())
 
-            optimizer_d.step()
-
         critic_losses.append(d_loss_avg/config.n_critic)
-
         generator.zero_grad()
         noise_batch = generate_noise(config.noise_size, config.batch_size, config.noise_type, rs)
         _ = generate_levy_jump_path(config.noise_size, x_batch)
@@ -191,15 +199,10 @@ def train(best_crps, ex_results_path):
         d_g_decision = critic(y_fake, x_batch)
         g_loss = -torch.mean(d_g_decision)
         g_loss.backward()
-
+        optimizer_g.step()
         # Track generator gradients
         gen_gradients.append(
             torch.mean(torch.stack([p.grad.norm() for p in generator.parameters() if p.grad is not None])).item())
-
-        optimizer_g.step()
-        gen_losses.append(g_loss.item())
-        gen_gradients.append(gen_gradients[-1])
-
 
         if step % 100 == 0:
             with torch.no_grad():
@@ -210,18 +213,30 @@ def train(best_crps, ex_results_path):
                     predictions.append(generator(x_val, noise_batch, batch_size=1
                                                  ).cpu().detach().numpy())
                 predictions = np.stack(predictions)
-
                 generator.train()
+
             crps = calc_crps(y_val, predictions[:200], predictions[200:])
 
             if crps <= best_crps:
                 best_crps = crps
-                #total_crps = total_crps.append(crps.item())
+                checkpoint_path = f'{ex_results_path}/chkpt.pt'
+                torch.save({
+                    'step': step,
+                    'generator_state_dict': generator.state_dict(),
+                    'discriminator_state_dict': critic.state_dict(),
+                    'optimizer_g_state_dict': optimizer_g.state_dict(),
+                    'optimizer_d_state_dict': optimizer_d.state_dict(),
+                    'best_crps': best_crps
+                }, checkpoint_path)
+                itr = step
+                _ = save(generator, ex_results_path, 'best', save_model)
+                best_gen = generator
 
             #trainig_critic_loss, trainig_gen_loss, trainig_crps_ = trainig_critic_loss.append(d_loss), trainig_gen_loss.append(g_loss), trainig_crps_.append(crps)
             print("step : {} , d_loss : {} , g_loss : {}, crps : {}, best crps : {}".format(step, d_loss.item(), g_loss,
-                                                                                            crps,
-                                                                                            best_crps))
+                                                                                  crps,best_crps))
+            critic_losses.append(d_loss_avg)
+            gen_losses.append(g_loss.detach().numpy())
             # monitor generated samples
             plot_samples(y_val, predictions, step)
 
@@ -230,10 +245,12 @@ def train(best_crps, ex_results_path):
     runtime = end_time - start_time  # Calculate the runtime
     saved_model_path = save(generator, ex_results_path, str(best_crps), save_model)
 
-    plot_losses(gen_losses, critic_losses)
-    plot_losses_avg(gen_losses, critic_losses)
-    plot_losses_max(gen_max_losses, critic_max_losses)
-    plot_gradiants(gen_gradients, critic_gradients)
+    plot_losses(gen_losses, critic_losses, ex_results_path)
+    plot_losses_avg(gen_losses, critic_losses, ex_results_path)
+    plot_gradiants(gen_gradients, crit_gradients, ex_results_path)
+
+    saved_model_path = save(best_gen, ex_results_path, 'best_' + str(best_crps) + 'epochs_' + str(itr), save_model)
+    return saved_model_path, generator, runtime
 
     return saved_model_path, generator, runtime
 
@@ -251,34 +268,37 @@ if __name__ == '__main__':
     rs = np.random.RandomState(rs_seed)
     result_path = "./results"
     saved_model_path = ""
-    dataset = "oil"  # WTI, BRENT
-    dataset_path = 'dataset/' + dataset + '.csv'
-    model_decriptipn = 'WCGAN + Merton Jump '
+    dataset_name = "oil.csv"
+    target_column = 'brent'
+    dataset_path = 'dataset/' + dataset_name
+    model_decriptipn = 'WCGAN-GP + Merton Jump '
     save_model = True
-    model_name = "SDE-WCGAN_v3"
+    model_name = "SDE-WCGAN-GP_v13_june"
     runtime = 0
+    grach_feature =None  #['estimated_volatility', 'returns', None]
 
     config = Config(
-        epochs=100,
+        epochs=7700,
         pred_len=1,
         seq_len=10,
         n_critic=1,
         model_name=model_name,
-        dataset=dataset,
+        dataset=target_column,
         crps=0.5,
-        optimiser=None,
+        optimiser='GP',
         lr=0.003,
         dropout=0.33,
         hidden_units1=64,
         hidden_units2=32,
-        sde_parameters={"param1": 0.02, "param2": 0.02},
-        batch_size=16,
-        noise_size=16,
+        sde_parameters={"Merton": 1, "CGAN-LSTM": 1},
+        batch_size=32,
+        noise_size=32,
         noise_type='normal',
         generator_latent_size=12,
         discriminator_latent_size=64,
-        loss='WGAN-PG',
-        sde= {'torch_seed': torch_seed, 'rs_seed':rs_seed}
+        loss='BCELoss',
+        seeds={'torch_seed': torch_seed, 'rs_seed': rs_seed},
+        sde='Merton + LSTM -WCGAN-GP'
     )
 
     # create a new job
@@ -293,14 +313,18 @@ if __name__ == '__main__':
     df = df[6:]
 
     #select target column name
-    target = 'brent'  # Price, WTI
+    target = target_column  # Price, WTI
 
     #add grach as feature
-    actual_volatility,estimated_volatility, forecast_volatility = grach_model(df[[target]], horizon=config.batch_size)
-    print(len(actual_volatility), len(estimated_volatility),len(forecast_volatility))
+    returns,estimated_volatility, _ = grach_model(df, target, horizon=config.batch_size)
+    #print(len(returns), len(estimated_volatility),len(forecast_volatility))
 
 
     df = df[[target, 'SENT']] # Price, WTI, SENT, GRACH
+
+    if grach_feature is not None:
+        df['grach'] = grach_feature
+        df['grach'].iloc[0]= df['grach'].iloc[1]
 
 
     #Exploratory Data Analysis (EDA) of Volatility Data
@@ -310,7 +334,7 @@ if __name__ == '__main__':
     train_size, valid_size, test_size = 2000, 180, 200
     data = create_dataset(df, target, train_size, valid_size, test_size, config.seq_len, config.pred_len)
 
-    print(f"Data : {dataset}, {data['X_train'].shape} , {data['y_train'].shape}")
+    print(f"Data : {dataset_name}, {data['X_train'].shape} , {data['y_train'].shape}")
     print()
 
     x_train = torch.tensor(data['X_train'], device=device, dtype=torch.float32)
@@ -324,7 +348,7 @@ if __name__ == '__main__':
     #################################################
 
     generator = Generator(
-        hidden_dim=config.generator_latent_size, feature_no=len(df.columns), seq_len=config.seq_len, noise_size=config.noise_size).to(device)
+        hidden_dim=config.generator_latent_size, feature_no=len(df.columns), seq_len=config.seq_len, noise_size=config.noise_size, batch_size=config.batch_size).to(device)
     critic = Critic(seq_len=config.seq_len,
                                   hidden_dim=config.discriminator_latent_size).to(device)
     x_train, y_train, x_val, y_val = data_to_tensor(data, device)
@@ -383,30 +407,34 @@ if __name__ == '__main__':
     # Ploting
     #################################################
 
-    plot_distibuation(trues, preds, saved_model_path)
-    plot_trues_preds(trues, preds, saved_model_path)
+    plot_distibuation(trues, preds, ex_results_path)
+    plot_trues_preds(trues, preds, ex_results_path)
     metrics = metric(trues, preds)
     metrics['crps'] = best_crps
-
-    #save trues and preds as npy files
-    save_results(trues, preds, metrics, saved_model_path)
     '''
+
     for name, param in generator.state_dict().items():
         print(name, param.size(), param.data)
     print(f"sigma: {generator.sigma}, lam {generator.lam}, r {generator.r}")
     '''
 
-    print_merton_example(r=0.02,v=0.02,m=0.02, lam =generator.lam, sigma = generator.sigma)
-    plot_distibuation(trues,preds, saved_model_path)
+    save_results(trues, preds, metrics, ex_results_path)
 
+    #print_merton_example(r=0.02, v=0.02, m=0.02, lam=generator.lam, sigma=generator.sigma)
 
+    plot_distibuation(trues, preds, ex_results_path)
     # save result details with configs to exp.csv file
-    save_config_to_excel(jobID, saved_model_path, result_path + '/exp.csv' , config, model_decriptipn,
-                         generator, metrics, {'train_size':train_size,
-                                              'valid_size':valid_size, 'test_size':test_size},runtime)
+    save_config_to_excel(jobID, ex_results_path, result_path + '/exp.csv', config, model_decriptipn,
+                         generator, metrics, {'train_size': train_size,
+                                              'valid_size': valid_size, 'test_size': test_size}, runtime)
 
     # Plot distribution of actual and predicted values
-    plot_distibuation_all(trues, preds, saved_model_path)
+    plot_distibuation_all(trues, preds, ex_results_path)
+    plot_err_histogram(trues, preds, ex_results_path)
 
+    scatter_plot(trues, preds, ex_results_path)
+    scatter_plot_res(trues, preds, ex_results_path)
 
+    print(config)
+    print(df.columns)
 

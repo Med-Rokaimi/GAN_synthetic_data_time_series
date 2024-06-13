@@ -13,7 +13,7 @@ device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("
 
 torch.manual_seed(42)
 rs = np.random.RandomState(1234)
-results_path = "./results/sde_gan_1/best.torch"
+results_path = "../results/sde_gan_1/best.torch"
 
 ##############################################################
 # Defining SDE network
@@ -228,13 +228,13 @@ def train(best_crps):
             if crps <= best_crps:
                 best_crps = crps
                 torch.save({'g_state_dict': generator.state_dict()},
-                           "./results/forGAN/best.torch")
+                           "../results/forGAN/best.torch")
 
             print("step : {} , d_loss : {} , g_loss : {}, crps : {}, best crps : {}".format(step, d_loss, g_loss, crps,
                                                                                             best_crps))
 
 
-df = pd.read_csv('dataset/oil.csv')
+df = pd.read_csv('../dataset/oil.csv')
 df = df[6:]
 df = df[['Price', 'SENT']]
 
@@ -287,7 +287,7 @@ if __name__ == '__main__':
         print('training mode is off')
 
     # print(predictions.shape)
-    checkpoint = torch.load("./results/forGAN/best.torch")
+    checkpoint = torch.load("../results/forGAN/best.torch")
     generator.load_state_dict(checkpoint['g_state_dict'])
 
     x_test = torch.tensor(data['X_test'], device=device, dtype=torch.float32)
