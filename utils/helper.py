@@ -156,7 +156,13 @@ def append_to_excel(file_path, new_data):
     print(f"New row appended to {file_path} ")
 
 
-def save_config_to_excel(jobID, exp_path, results_folder, config, model_decriptipn, generator, metrics, dataset, runtime):
+def save_config_to_excel(jobID, exp_path, results_folder, config, model_decriptipn, generator, metrics, dataset, runtime, SDE=True):
+    if SDE:
+        lam = generator.lam.data
+        sigma = generator.sigma.data
+    else:
+        lam= 'N/A'
+        sigma = 'N/A'
 
     data =  { 'jobID':jobID, 'timestamp': create_time_stamp() , 'path':exp_path,
               'Model': config.model_name,
@@ -169,7 +175,7 @@ def save_config_to_excel(jobID, exp_path, results_folder, config, model_decripti
               'lr':config.lr, 'droupout': config.dropout,
               'pred_len': config.pred_len, 'seq_len':config.seq_len,
               'runtime':runtime, 'config':config,
-              'sde_params': [generator.lam, generator.sigma],
+              'sde_params': {'lam':lam, 'sig': sigma},
               'seeds':config.seeds, 'model_decription':model_decriptipn,
               'dataset_shape':dataset}
 

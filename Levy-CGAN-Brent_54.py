@@ -17,7 +17,7 @@ from args.config import Config
 from utils.evaluation import calc_crps, metric, plot_trues_preds, plot_distibuation, save_results, \
     plot_distibuation_all, plot_err_histogram, plot_gradiants, plot_losses, scatter_plot, scatter_plot_res, \
     get_gradient_statistics
-from data.data import create_dataset, grach_model
+from data.data import create_dataset
 from utils.helper import save, create_exp, append_to_excel, save_config_to_excel
 from utils.layer import LipSwish
 
@@ -38,6 +38,8 @@ class Generator(nn.Module):
         self.lstm = nn.LSTM(
             self.input_dim + config.noise_size, self.hidden_dim, self.layer_dim, batch_first=True, bidirectional=True, dropout=self.dropout
         )
+        self.gru = nn.GRU(self.hidden_dim * 2, self.hidden_dim, batch_first=True, bidirectional=True,
+                          dropout=self.dropout)
 
         # Fully connected layer
         self.fc_1 = nn.Linear(self.hidden_dim * 2, 12)  # fully connected
@@ -51,7 +53,8 @@ class Generator(nn.Module):
 
     def forward(self, x, noise, batch_size): # x = [16, 10, 2]
 
-        #x = (x-self.mean)/self.std
+        x = (x-self.mean)/self.std
+
         h0 = torch.zeros(self.layer_dim * 2, x.size(0), self.hidden_dim, device=x.device).requires_grad_()
         # could be an SDE noise as SDE-GAN does ملاحظة
         c0 = torch.zeros(self.layer_dim * 2, x.size(0), self.hidden_dim, device=x.device).requires_grad_()
@@ -66,6 +69,7 @@ class Generator(nn.Module):
                                dim=-1)  # Shape: (batch_size, seq_length, features_number + noise_dim)
 
         out, (hn, cn) = self.lstm(x_combined, (h0, c0))
+        #out, hn = self.gru(out)
 
 
         # Reshaping the outputs in the shape of (batch_size, seq_length, hidden_size)
@@ -95,7 +99,7 @@ class Discriminator(nn.Module):
         self.model = nn.Sequential(
             nn.Linear(in_features=hidden_dim, out_features=1),
             nn.Sigmoid(),
-            LipSwish(),
+            #LipSwish(),
 
         )
 
@@ -132,9 +136,9 @@ def load_real_samples(batch_size):
 
 
 def generate_sde_motion(noise_size, x_batch):
-    r, m, v, T = torch.tensor(0.02), torch.tensor(0.02), torch.tensor(0.02), 2
-    sigma = torch.tensor(0.0891)
-    lam = torch.tensor(0.0302)
+    r, m, v, T = torch.tensor(0.02), torch.tensor(0.02), torch.tensor(0.02), 1
+    sigma = torch.tensor(0.02)
+    lam = torch.tensor(0.02)
     steps = x_batch.shape[0]
     Npaths = noise_size
 
@@ -144,9 +148,12 @@ def generate_sde_motion(noise_size, x_batch):
 
 
 def generate_fake_samples(generator, noise_size, x_batch):
+
     noise_batch = generate_noise(noise_size, x_batch.size(0), config.noise_type, rs)
+
     # print("noise_batch shape", noise_batch.shape)
     _ = generate_sde_motion(noise_size, x_batch)
+
     y_fake = generator(x_batch, noise_batch, x_batch.size(0)).detach()
     # labels = zeros((x_batch.size(0), 1))  #Label=0 indicating they are fake
     return x_batch, y_fake
@@ -269,28 +276,27 @@ if __name__ == '__main__':
     #################################################
 
     device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-    torch_seed, rs_seed = 42,4
+    torch_seed, rs_seed = 4,4
     torch.manual_seed(torch_seed)
     rs = np.random.RandomState(rs_seed)
     result_path = "results"
     saved_model_path = ""
     dataset_name = "oil.csv"
-    target_column = 'WTI' # the column name of the target time series (brent or WTI)
+    target_column = 'brent' # the column name of the target time series (brent or WTI)
     dataset_path = 'dataset/' + dataset_name
     model_decriptipn = 'CGAN + Merton Jump '
     model_name = 'SDE_CGAN_v10_june'
     save_model = True
-    grach_feature = None #'estimated_volatility'  # ['estimated_volatility', 'returns', None]
     config = Config(
-        epochs=5200,
+        epochs=6200,
         pred_len=1,
-        seq_len=15,
+        seq_len=10,
         n_critic = 1,
         model_name=model_name,
         dataset=target_column,
         crps=0.5,
         optimiser=None,
-        lr=0.0001,
+        lr=0.0033,
         dropout=0.33,
         hidden_units1=64,
         hidden_units2=32,
@@ -312,21 +318,17 @@ if __name__ == '__main__':
     df = pd.read_csv(dataset_path)
     df = df[6:]
 
-    # add grach as feature
-    grach_dic = grach_model(df, target_column, horizon=config.batch_size)
-    #print(len(returns), len(estimated_volatility),len(forecast_volatility))
-
     df = df[[target_column, 'SENT']]  # Price, WTI, SENT, GRACH
-
+    ''' 
     if grach_feature is not None:
-        df['grach'] = grach_dic[grach_feature]
+        df['grach'] = grach_feature
         df['grach'].iloc[0] = df['grach'].iloc[1]
-
+    '''
     # Exploratory Data Analysis (EDA) of Volatility Data
     #from utils.helper import eda
     #eda(df, target)
 
-    train_size, valid_size, test_size = 1800, 200, 200
+    train_size, valid_size, test_size = 2000, 260, 100
     data = create_dataset(df, target_column, train_size, valid_size, test_size, config.seq_len, config.pred_len)
 
     print(f"Data : {dataset_name}, {data['X_train'].shape} , {data['y_train'].shape}")
@@ -351,8 +353,8 @@ if __name__ == '__main__':
     discriminator = Discriminator(seq_len=config.seq_len,
                                   hidden_dim=config.discriminator_latent_size).to(device)
 
-    optimizer_g = torch.optim.RMSprop(generator.parameters())
-    optimizer_d = torch.optim.RMSprop(discriminator.parameters())
+    optimizer_g = torch.optim.RMSprop(generator.parameters(), lr=config.lr)
+    optimizer_d = torch.optim.RMSprop(discriminator.parameters(), lr=config.lr)
     adversarial_loss = nn.BCELoss()
     adversarial_loss = adversarial_loss.to(device)
 
